@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools"]
+
+[project]
+name = "openvital"
+version = "0.1.0"
+description = "Open-source Python library for biosignal analysis (ECG, ABP, PPG, capnography, EEG, NIRS, ...) — successor to pyvital, expanding beyond ECG."
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT"
+authors = [
+    {name = "VitalLab", email = "vital@snu.ac.kr"}
+]
+keywords = [
+    "biosignal",
+    "vital-signs",
+    "ecg",
+    "abp",
+    "ppg",
+    "capnography",
+    "eeg",
+    "nirs",
+    "signal-processing",
+    "medical",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Healthcare Industry",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    "numpy",
+    "scipy",
+    "sanic",
+    "PyWavelets",
+    "tensorflow>=2.6",
+    "keras",
+    "torch",
+    "openecg>=0.2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/vitaldb/openvital"
+Repository = "https://github.com/vitaldb/openvital"
+
+[tool.setuptools]
+packages = ["openvital", "openvital.filters"]
+
+[tool.setuptools.package-data]
+"openvital.filters" = ["*.h5", "*.pth"]
