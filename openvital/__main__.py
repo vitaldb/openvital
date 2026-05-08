@@ -29,6 +29,18 @@ default_cfgs = {}  # Default settings and data for the module
 mods = {}  # Loaded modules
 mod_cfgs = []  # load module cfgs
 
+# Filter modules whose extras (deps not in the base install) gate them.
+# Keep this in sync with [project.optional-dependencies] in pyproject.toml
+# so the install hint we print on ImportError is correct.
+_FILTER_EXTRAS = {
+    'abp_hpi':                  'ml-torch',     # torch (HpiModel)
+    'ecg_beat_noise_detector':  'ml-torch',     # torch (UniMSNet.pth)
+    'sv_dlapco':                'ml-torch',     # torch
+    'ecg_classifier':           'ml-tf',        # tensorflow + keras
+    'abp_ppv':                  'signal',       # scipy.signal/interpolate
+    'pleth_spi':                'signal',       # scipy.stats
+}
+
 # load filters
 for root, dirs, files in os.walk(filter_folder):
     for filename in files:
@@ -38,7 +50,19 @@ for root, dirs, files in os.walk(filter_folder):
 
         m_modname = filename[:-3]  #filepath[:-3].replace(os.sep, ".")
         print('importing ' + m_modname)
-        o = importlib.import_module(m_modname)
+        try:
+            o = importlib.import_module(m_modname)
+        except ImportError as e:
+            # A filter's extra-dependency is not installed. Skip this filter
+            # (so the server still starts) and tell the user how to enable it.
+            extra = _FILTER_EXTRAS.get(m_modname)
+            if extra:
+                print(f'  [skipped] {m_modname}: missing optional dep — '
+                      f'install with `pip install openvital[{extra}]` '
+                      f'(underlying error: {e})')
+            else:
+                print(f'  [skipped] {m_modname}: import failed — {e}')
+            continue
         mods[m_modname] = o  # modules are saved for later reloading
 
         if not hasattr(o, 'cfg'):
@@ -127,6 +151,15 @@ async def run_filter(request, modname):
     inp = posts['inputs']
     m_modname = os.path.basename(modname)  # module name
 
+    if m_modname not in mods:
+        # The filter was skipped at startup (missing optional dep). Tell
+        # the caller which extra they need rather than 500-erroring.
+        extra = _FILTER_EXTRAS.get(m_modname)
+        msg = (f'filter {m_modname!r} is unavailable: missing optional '
+               f'dependency. Install with `pip install '
+               f'openvital[{extra}]`.' if extra else
+               f'filter {m_modname!r} is not loaded.')
+        return response.json({'error': msg}, status=503)
     o = mods[m_modname]
 
     if invokeid not in cfgs.keys():  # whether this invokeid is a new one?
