@@ -3,7 +3,7 @@ requires = ["setuptools"]
 
 [project]
 name = "openvital"
-version = "0.1.0"
+version = "0.2.0"
 description = "Open-source Python library for biosignal analysis (ECG, ABP, PPG, capnography, EEG, NIRS, ...) — successor to pyvital, expanding beyond ECG."
 readme = "README.md"
 requires-python = ">=3.8"
@@ -31,16 +31,25 @@ classifiers = [
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
 ]
+# Required deps: numpy + openecg (which itself is numpy-only) + sanic for
+# the built-in HTTP filter server (`python -m openvital`). Heavier deps
+# live in optional extras — install only what your filter modules need.
 dependencies = [
     "numpy",
-    "scipy",
+    "openecg>=0.3.2",
     "sanic",
-    "PyWavelets",
-    "tensorflow>=2.6",
-    "keras",
-    "torch",
-    "openecg>=0.2.0",
 ]
+
+[project.optional-dependencies]
+# Required by abp_hpi, abp_ppv, pleth_*, resp_compliance, sv_dlapco etc.
+# (anything that uses scipy.signal or band_pass/detect_peaks).
+signal = ["scipy"]
+# ecg_classifier (rhythm + beat classification with model_rhythm.h5).
+ml-tf = ["tensorflow>=2.6", "keras"]
+# ecg_beat_noise_detector (UniMSNet.pth).
+ml-torch = ["torch"]
+# Everything (including all ML backbones).
+all = ["scipy", "tensorflow>=2.6", "keras", "torch"]
 
 [project.urls]
 Homepage = "https://github.com/vitaldb/openvital"

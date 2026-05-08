@@ -1,7 +1,28 @@
 import math
 import numpy as np
-import scipy
-from scipy.signal import butter, filtfilt, argrelextrema
+from openecg.dsp import butter, filtfilt
+
+
+def _argrelmax(a, order=1):
+    """np-only equivalent of scipy.signal._argrelmax(a, np.greater_equal,
+    order=order) — sample indices where a[i] is >= every neighbour
+    within ±order."""
+    n = len(a)
+    if n < 2:
+        return np.empty(0, dtype=np.int64)
+    is_max = np.ones(n, dtype=bool)
+    for k in range(1, int(order) + 1):
+        is_max[k:] &= a[k:] >= a[:-k]
+        is_max[:-k] &= a[:-k] >= a[k:]
+    return np.where(is_max)[0]
+
+
+def _uniform_filter1d(x, N):
+    """Centered N-sample boxcar — replaces scipy.ndimage's
+    uniform_filter1d(..., origin=-(N//2)) used by _moving_average."""
+    if N <= 1:
+        return np.asarray(x, dtype=np.float64)
+    return np.convolve(x, np.ones(int(N)) / float(N), mode="same")
 
 
 def corr(a, b):
@@ -47,7 +68,7 @@ def interp_undefined(a):
 
 def _detect_window_maxima(a, wind=1):
     span = int(wind / 2)
-    ret = np.array(argrelextrema(a, np.greater_equal, order=span)[0])
+    ret = np.array(_argrelmax(a, order=span))
     valid_ret = []
     for i in ret:
         if i > span and i < len(a) - span:
@@ -64,11 +85,11 @@ def _detect_maxima(data, tr=None):
     return: sorted peak index above tr
     """
     if tr is None:
-        return np.array(argrelextrema(data, np.greater_equal)[0])
+        return np.array(_argrelmax(data))
     else:
         tval = np.percentile(data, tr)
         ret = []
-        for i in argrelextrema(data, np.greater_equal)[0]:
+        for i in _argrelmax(data):
             if data[i] > tval:
                 ret.append(i)
         return np.array(ret)
@@ -101,7 +122,7 @@ def find_nearest(a, value):
 
 def _moving_average(x, N):
     x = np.pad(x, (N//2, N-1-N//2), mode='edge')
-    return scipy.ndimage.filters.uniform_filter1d(x, N, mode='constant', origin=-(N//2))[:-(N-1)]
+    return _uniform_filter1d(x, N)[:-(N-1) if N > 1 else None]
 
 
 def detect_qrs(data, srate):

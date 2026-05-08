@@ -2,7 +2,7 @@ import openvital as arr
 import numpy as np
 import math
 import copy
-import pywt
+from openecg import dsp
 
 
 cfg = {
@@ -34,7 +34,7 @@ def denoise(data, wsize):
 
 def cwt(data, srate, wname, freq):
     scale = 0.16 * srate / freq  # for gaus1
-    sig = pywt.cwt(data, [scale], wname)[0].flatten()
+    sig = dsp.cwt(data, [scale], wname)[0].flatten()
     return sig
 
 
@@ -83,22 +83,22 @@ def run(inp, opt, cfg):
 
     # denoised ecg
     depth = int(math.ceil(np.log2(srate / 0.8))) - 1
-    ad = pywt.wavedec(data, 'db2', level=depth)
+    ad = dsp.wavedec(data, 'db2', level=depth)
     ad[0].fill(0)  # low frequency approx -> 0
-    ecg_denoised = pywt.waverec(ad, 'db2')
+    ecg_denoised = dsp.waverec(ad, 'db2')
 
-    # interpolation filter
-    inter1 = pywt.Wavelet('inter1', filter_bank=orthfilt([0.25, 0.5, 0.25]))
+    # interpolation filter — pass the 4-tuple filter bank directly
+    inter1 = orthfilt([0.25, 0.5, 0.25])
 
     # qrs augmented ecg
     sig = cwt(data, srate, 'gaus1', 13)  # 13 Hz gaus convolution
     depth = int(math.ceil(np.log2(srate / 23))) - 2
-    ad = pywt.wavedec(sig, inter1, level=depth)
+    ad = dsp.wavedec(sig, inter1, level=depth)
     for level in range(depth):  # remove [0-30Hz]
         wsize = int(2 * srate / (2 ** (level+1)))  # 2 sec window
         denoise(ad[depth-level], wsize)  # Remove less than 30 hz from all detail
     ad[0].fill(0)  # most lowest frequency approx -> 0
-    ecg_qrs = pywt.waverec(ad, inter1)
+    ecg_qrs = dsp.waverec(ad, inter1)
 
     # start parsing
     qslist = []  # qrs list [startqrs, endqrs, startqrs, endqrs, ...]
