@@ -1,6 +1,4 @@
 import sys
-from sanic import Sanic
-from sanic import response
 import json
 import importlib
 import os
@@ -8,6 +6,8 @@ import traceback
 import copy
 import gzip
 import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import unquote
 
 filter_folder = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'filters')
 server_port = 3000
@@ -129,60 +129,88 @@ for root, dirs, files in os.walk(filter_folder):
             "reference": refer
         })
 
-app = Sanic("filter_server")
+# stdlib http.server is a single-threaded, zero-deps replacement for the old
+# sanic-based server. The wire protocol (gzip JSON in / out) is unchanged so
+# existing clients (Vital Recorder etc.) need no changes. Single-thread is
+# intentional — it preserves the prior sanic-event-loop semantics where state
+# (cfgs, default_cfgs) is mutated without locks.
+class FilterHandler(BaseHTTPRequestHandler):
+    # silence default access log (was access_log=False in sanic)
+    def log_message(self, fmt, *args):
+        pass
 
-@app.get("/")
-async def list_filter(request):
-    return response.json(mod_cfgs)
+    def _send(self, code, body=b'', ctype='application/octet-stream'):
+        self.send_response(code)
+        self.send_header('Content-Type', ctype)
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        if body:
+            self.wfile.write(body)
 
-@app.post('/<modname>')
-async def run_filter(request, modname):
-    posts = gzip.decompress(request.body)
-    posts = posts.decode('utf-8')
+    def _send_json(self, code, obj):
+        body = json.dumps(obj).encode('utf-8')
+        self._send(code, body, 'application/json')
 
-    #print('[' + posts + ']')
-    try:
-        posts = json.loads(posts)
-    except Exception as e:
-        print(e)
-        return response.raw('')
+    def do_GET(self):
+        if self.path == '/':
+            self._send_json(200, mod_cfgs)
+        else:
+            self._send(404)
 
-    invokeid = posts['invokeid']
-    inp = posts['inputs']
-    m_modname = os.path.basename(modname)  # module name
+    def do_POST(self):
+        modname = unquote(self.path.lstrip('/'))
+        m_modname = os.path.basename(modname)
 
-    if m_modname not in mods:
-        # The filter was skipped at startup (missing optional dep). Tell
-        # the caller which extra they need rather than 500-erroring.
-        extra = _FILTER_EXTRAS.get(m_modname)
-        msg = (f'filter {m_modname!r} is unavailable: missing optional '
-               f'dependency. Install with `pip install '
-               f'openvital[{extra}]`.' if extra else
-               f'filter {m_modname!r} is not loaded.')
-        return response.json({'error': msg}, status=503)
-    o = mods[m_modname]
+        if m_modname not in mods:
+            # The filter was skipped at startup (missing optional dep). Tell
+            # the caller which extra they need rather than 500-erroring.
+            extra = _FILTER_EXTRAS.get(m_modname)
+            msg = (f'filter {m_modname!r} is unavailable: missing optional '
+                   f'dependency. Install with `pip install '
+                   f'openvital[{extra}]`.' if extra else
+                   f'filter {m_modname!r} is not loaded.')
+            self._send_json(503, {'error': msg})
+            return
 
-    if invokeid not in cfgs.keys():  # whether this invokeid is a new one?
-        if m_modname not in default_cfgs.keys():  # if the module is loaded at first or changed
-            default_cfgs[m_modname] = copy.deepcopy(o.cfg)
-        cfg = copy.deepcopy(default_cfgs[m_modname])
-        cfgs[invokeid] = cfg
-    else:  # reload the data of the invokeid
-        cfg = cfgs[invokeid]
+        try:
+            clen = int(self.headers.get('Content-Length', 0))
+            raw = self.rfile.read(clen) if clen else b''
+            posts = json.loads(gzip.decompress(raw).decode('utf-8'))
+        except Exception as e:
+            print(f'bad request body: {e}')
+            self._send(400)
+            return
 
-    cfg['interval'] = posts['interval']  # Interval, overlap must be user-specified values
-    cfg['overlap'] = posts['overlap']
-    cfg['invokeid'] = invokeid
+        try:
+            invokeid = posts['invokeid']
+            inp = posts['inputs']
+            o = mods[m_modname]
 
-    opt = []
-    if 'options' in posts:
-        opt = posts['options']
+            if invokeid not in cfgs:
+                if m_modname not in default_cfgs:
+                    default_cfgs[m_modname] = copy.deepcopy(o.cfg)
+                cfgs[invokeid] = copy.deepcopy(default_cfgs[m_modname])
+            cfg = cfgs[invokeid]
 
-    ret = o.run(inp, opt, cfg)  # evoke run function
-    ret = json.dumps(ret)  # print the result
-    ret = gzip.compress(ret.encode('utf-8'))
+            cfg['interval'] = posts['interval']
+            cfg['overlap'] = posts['overlap']
+            cfg['invokeid'] = invokeid
 
-    return response.raw(ret)
+            opt = posts.get('options', [])
+            ret = o.run(inp, opt, cfg)
+            body = gzip.compress(json.dumps(ret).encode('utf-8'))
+            self._send(200, body)
+        except Exception as e:
+            print(f'filter {m_modname!r} run error: {e}')
+            traceback.print_exc()
+            self._send(500)
+
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=server_port, access_log=False)
+    server = HTTPServer(('0.0.0.0', server_port), FilterHandler)
+    print(f'serving on http://0.0.0.0:{server_port}')
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    server.server_close()
