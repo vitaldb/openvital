@@ -3,13 +3,24 @@ import openvital as arr
 cfg = {
     'name': 'ECG - QRS detector',
     'group': 'Medical algorithms',
-    'desc': 'Simple QRS detector',
-    'reference': 'http://ocw.utm.my/file.php/38/SEB4223/07_ECG_Analysis_1_-_QRS_Detection.ppt%20%5BCompatibility%20Mode%5D.pdf',
+    'desc': 'Gradient-thresholded QRS detector with per-beat QRS width and '
+            'rule-based AFib classification over rolling 10-s windows.',
+    'reference': 'https://github.com/snu-bdac/openecg',
     'overlap': 3,  # 3 sec overlap for HR=20
     'interval': 40,
     'inputs': [{"name": 'ECG', "type": 'wav'}],
-    'outputs': [{"name": 'RPEAK', "type": 'num', "min": 0, "max": 2}]
+    'outputs': [
+        {"name": 'RPEAK', "type": 'num', "min": 0, "max": 2},
+        {"name": 'QRSW', "type": 'num', "min": 40, "max": 220},  # ms
+        {"name": 'AFIB', "type": 'num', "min": 0, "max": 1},     # 0=NSR/other, 1=AFib
+    ]
 }
+
+
+# AFib decision uses 10-second sliding windows over the detected R-peaks.
+# Slides every 5 s so each window decision lands at its mid-point.
+_AFIB_WIN_S = 10.0
+_AFIB_HOP_S = 5.0
 
 
 def run(inp, opt, cfg):
@@ -21,9 +32,34 @@ def run(inp, opt, cfg):
     data = arr.interp_undefined(inp[trk_name]['vals'])
     srate = inp[trk_name]['srate']
 
-    r_list = arr.detect_qrs(data, srate)  # detect r-peak
+    # Detect R-peaks + per-beat QRS widths in one pass.
+    r_list, w_list = arr.detect_qrs(data, srate, return_widths=True)
+
     ret_rpeak = []
-    for idx in r_list:
+    ret_qrsw = []
+    for idx, w_ms in zip(r_list, w_list):
         dt = idx / srate
         ret_rpeak.append({'dt': dt, 'val': 1})
-    return [ret_rpeak]
+        ret_qrsw.append({'dt': dt, 'val': float(w_ms)})
+
+    # Rolling-window AFib decision. Each window emits a {dt, val} sample
+    # at the window mid-point so downstream readers can plot it as a
+    # discrete track. A window with < 5 R-peaks is left undecided.
+    from openecg import is_afib as _is_afib
+    ret_afib = []
+    n_total = len(data)
+    win_n = int(round(_AFIB_WIN_S * srate))
+    hop_n = int(round(_AFIB_HOP_S * srate))
+    for start in range(0, max(1, n_total - win_n + 1), hop_n):
+        end = start + win_n
+        if end > n_total:
+            break
+        seg = data[start:end]
+        try:
+            val = 1 if _is_afib(seg, srate) else 0
+        except Exception:
+            continue
+        mid_dt = (start + win_n / 2.0) / srate
+        ret_afib.append({'dt': mid_dt, 'val': val})
+
+    return [ret_rpeak, ret_qrsw, ret_afib]

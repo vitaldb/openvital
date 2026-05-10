@@ -125,7 +125,7 @@ def _moving_average(x, N):
     return _uniform_filter1d(x, N)[:-(N-1) if N > 1 else None]
 
 
-def detect_qrs(data, srate):
+def detect_qrs(data, srate, return_widths=False):
     """Find QRS R-peaks and return their sample indices.
 
     Delegates to ``openecg.detect_qrs`` (gradient-thresholded detector,
@@ -135,8 +135,15 @@ def detect_qrs(data, srate):
 
     Algorithm: Makowski's gradient-thresholded QRS detector (originally
     in NeuroKit2, vendored under MIT license; see ``openecg/qrs.py``).
+
+    When ``return_widths=True``, also returns a parallel list of per-beat
+    QRS widths in ms (baseline-relative gradient-envelope measurement,
+    physiological floor ≥40 ms; see ``openecg.measure_qrs_widths``).
     """
     from openecg import detect_qrs as _openecg_detect_qrs
+    if return_widths:
+        peaks, widths_ms = _openecg_detect_qrs(data, srate, return_widths=True)
+        return peaks.tolist(), widths_ms.tolist()
     return _openecg_detect_qrs(data, srate).tolist()
 
 
