@@ -1,0 +1,16 @@
+.git
+.gitignore
+build
+dist
+*.egg-info
+__pycache__
+*.pyc
+*.pyo
+.venv
+venv
+.idea
+.vscode
+.DS_Store
+README.md
+LICENSE
+pyproject.toml

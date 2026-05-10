@@ -24,10 +24,9 @@ print('server port : ' + str(server_port))
 
 sys.path.insert(0, filter_folder)
 
-cfgs = {}  # Current settings and data for the module (the corresponding invokeid)
-default_cfgs = {}  # Default settings and data for the module
+default_cfgs = {}  # Default settings and data for each module
 mods = {}  # Loaded modules
-mod_cfgs = []  # load module cfgs
+mod_cfgs = []  # Filter list metadata (returned to clients on GET /)
 
 # Filter modules whose extras (deps not in the base install) gate them.
 # Keep this in sync with [project.optional-dependencies] in pyproject.toml
@@ -129,11 +128,14 @@ for root, dirs, files in os.walk(filter_folder):
             "reference": refer
         })
 
-# stdlib http.server is a single-threaded, zero-deps replacement for the old
-# sanic-based server. The wire protocol (gzip JSON in / out) is unchanged so
-# existing clients (Vital Recorder etc.) need no changes. Single-thread is
-# intentional — it preserves the prior sanic-event-loop semantics where state
-# (cfgs, default_cfgs) is mutated without locks.
+# stdlib http.server is a zero-deps replacement for the old sanic-based
+# server. The wire protocol (gzip JSON in / out) is unchanged so existing
+# clients (Vital Recorder etc.) need no changes. The handler is stateless —
+# every POST starts from a fresh deepcopy of default_cfgs[modname], so the
+# server is safe under concurrency (Lambda containers, multiple workers)
+# and free of the previous unbounded `cfgs[invokeid]` leak. Filters that
+# need cross-chunk continuity (only pleth_pvi mutates cfg in-place) must
+# rely on a window long enough to converge within a single call.
 class FilterHandler(BaseHTTPRequestHandler):
     # silence default access log (was access_log=False in sanic)
     def log_message(self, fmt, *args):
@@ -186,11 +188,9 @@ class FilterHandler(BaseHTTPRequestHandler):
             inp = posts['inputs']
             o = mods[m_modname]
 
-            if invokeid not in cfgs:
-                if m_modname not in default_cfgs:
-                    default_cfgs[m_modname] = copy.deepcopy(o.cfg)
-                cfgs[invokeid] = copy.deepcopy(default_cfgs[m_modname])
-            cfg = cfgs[invokeid]
+            if m_modname not in default_cfgs:
+                default_cfgs[m_modname] = copy.deepcopy(o.cfg)
+            cfg = copy.deepcopy(default_cfgs[m_modname])
 
             cfg['interval'] = posts['interval']
             cfg['overlap'] = posts['overlap']
