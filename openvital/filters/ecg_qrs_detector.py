@@ -8,11 +8,29 @@ cfg = {
     'reference': 'https://github.com/snu-bdac/openecg',
     'overlap': 3,  # 3 sec overlap for HR=20
     'interval': 40,
-    'inputs': [{"name": 'ECG', "type": 'wav'}],
+    'inputs': [{
+        "name": 'ECG', "type": 'wav',
+        "fhir_code": {"coding": [{
+            "system": "urn:iso:std:iso:11073:10101",
+            "code": "131329", "display": "ECG lead II"
+        }]},
+    }],
     'outputs': [
-        {"name": 'RPEAK', "type": 'num', "min": 0, "max": 2},
-        {"name": 'QRSW', "type": 'num', "min": 40, "max": 220},  # ms
-        {"name": 'AFIB', "type": 'num', "min": 0, "max": 1},     # 0=NSR/other, 1=AFib
+        {"name": 'RPEAK', "type": 'num', "min": 0, "max": 2,
+         "fhir_code": {"coding": [{
+             "system": "http://loinc.org",
+             "code": "8867-4", "display": "Heart beat"
+         }]}},
+        {"name": 'QRSW', "type": 'num', "min": 40, "max": 220, "unit": "ms",
+         "fhir_code": {"coding": [{
+             "system": "http://loinc.org",
+             "code": "LP30605-7", "display": "QRS duration"
+         }]}},
+        {"name": 'AFIB', "type": 'num', "min": 0, "max": 1,
+         "fhir_code": {"coding": [{
+             "system": "http://loinc.org",
+             "code": "LA17075-2", "display": "Atrial fibrillation present"
+         }]}},
     ]
 }
 

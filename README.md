@@ -73,14 +73,36 @@ Each filter module implements a `run(inp, opt, cfg)` function and a `cfg` dict d
 
 ## Filter Server
 
-openvital includes a built-in HTTP server (Sanic) that exposes filters as REST endpoints:
+openvital includes a built-in HTTP server that exposes filters as REST endpoints:
 
 ```bash
 python -m openvital [filter_folder] [port]
 ```
 
+### Legacy JSON API
+
 - `GET /` returns the list of available filters and their configurations.
 - `POST /<module_name>` runs a filter with gzip-compressed JSON input.
+
+### FHIR R4 API (since 0.4.0a1)
+
+Each filter is also exposed as a FHIR R4 system-level Operation, designed to
+interoperate with `api.vitaldb.net/fhir` (same `valueSampledData` encoding —
+`period` ms, `factor` gain, `origin` bias, integer/decimal tokens with
+`E`/`L`/`U`/`?` markers).
+
+- `GET /fhir/metadata` — `CapabilityStatement` listing every available filter.
+- `GET /fhir/OperationDefinition/<filter-name>` — full input/output contract.
+- `POST /fhir/$<filter-name>` — takes a `Parameters` resource (input
+  `Observation` + interval/overlap/options), returns a `Bundle` of result
+  `Observation`s with LOINC-coded outputs. Filter names use hyphens
+  (`ecg-qrs-detector`) where module names use underscores.
+
+Example::
+
+    curl -X POST https://your.host/fhir/\$ecg-qrs-detector \
+         -H 'Content-Type: application/fhir+json' \
+         -d @ecg_window.json   # Parameters resource with one Observation
 
 ## License
 

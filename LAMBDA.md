@@ -15,15 +15,17 @@ by orders of magnitude. Lambda + container image gives:
 - Auto-scale on demand, zero cost when idle.
 - Memory leak fix (the prior `cfgs[invokeid]` dict on EC2 grew unbounded).
 
-## Wire protocol — UNCHANGED
+## Wire protocols
 
-Vital Recorder, the EC2 server, and openvital must agree on the same wire
-format. Lambda migration does **not** change anything visible to clients:
+The Lambda exposes two wire formats on the same container, dispatched by
+URL prefix in `openvital/__main__.py`:
+
+### Legacy JSON (VR — UNCHANGED)
 
 - `GET /` → JSON array of filter metadata (modname, name, group, desc,
-  interval, overlap, inputs, outputs). Each entry is what the
-  module's `cfg` dict declares plus inputs/outputs lists. Clients are
-  expected to read only these well-known keys.
+  interval, overlap, inputs, outputs). Each entry is what the module's
+  `cfg` dict declares plus inputs/outputs lists. Clients are expected to
+  read only these well-known keys.
 - `POST /<modname>` → request body is gzipped JSON
   `{interval, overlap, invokeid, inputs, options}`; response is gzipped
   JSON list-of-tracks (`[[{dt,val}, ...], ...]`) or `null`.
@@ -32,6 +34,26 @@ If you change any of these field names or shapes, update **all three** in
 the same release: `openvital/__main__.py`, the deployed server (Lambda
 container or fallback EC2), and the VR client (`src/FILT.cpp`,
 `src/VRApp.cpp::CVRApp::load_filters`).
+
+### FHIR R4 (public, since 0.4.0a1)
+
+Each filter is also a system-level FHIR Operation, matching the encoding
+that `api.vitaldb.net/fhir` emits.
+
+- `GET /fhir/metadata` → `CapabilityStatement` listing every filter as an
+  operation.
+- `GET /fhir/OperationDefinition/<filter-name>` → input/output contract,
+  derived live from the filter module's `cfg` dict (so adding a new filter
+  module is enough — no spec edit).
+- `POST /fhir/$<filter-name>` → `Parameters` in (one `Observation` per
+  input slot, plus `interval`/`overlap`/`option`), `Bundle` of result
+  `Observation`s out. SampledData is decoded with `factor`/`origin`
+  applied; `E`/`L`/`U`/`?` tokens become NaN. Filter names use hyphens
+  (`ecg-qrs-detector`) where module names use underscores.
+
+The FHIR adapter lives in `openvital/fhir_adapter.py` (pure functions,
+no I/O — Lambda-safe). The handler in `__main__.py` is a thin router and
+response builder around it.
 
 ## What changed in `__main__.py` for Lambda
 
@@ -117,6 +139,16 @@ Concurrency for the latency-sensitive case).
   `595007890878:ap-northeast-2`. Slated for termination once Lambda is
   verified.
 - ECR repo: `595007890878.dkr.ecr.ap-northeast-2.amazonaws.com/openvital-filter`.
-- Lambda function name: `openvital-filter`.
-- Custom domain `filter.vitaldb.net` is fronted by CloudFront pointing
-  at the Lambda Function URL.
+- Lambda function name: `openvital-filter` (container image,
+  ap-northeast-2). The Lambda Function URL is `AWS_IAM`-auth so the
+  public face is always API Gateway, never the Function URL directly.
+- HTTP API v2 `openvital-filter` (id `rajpvo0wd1`, ap-northeast-2) — its
+  `$default` stage routes to the Lambda. Both custom domains map to this
+  one stage:
+  - `filter.vitaldb.net` (VR) — REGIONAL custom domain, ACM cert in
+    ap-northeast-2.
+  - `api.openvital.io` (public) — REGIONAL custom domain, separate ACM
+    cert in ap-northeast-2.
+- For the `api.openvital.io` wiring (Route 53 + ACM + APIGW custom
+  domain + API mapping + A-alias), see [`OPENVITAL_IO.md`](OPENVITAL_IO.md)
+  and the idempotent script `scripts/setup_openvital_io.sh`.

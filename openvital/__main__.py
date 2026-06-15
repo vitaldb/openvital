@@ -9,6 +9,16 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import unquote
 
+from openvital.fhir_adapter import (
+    params_to_filter_input,
+    result_to_bundle,
+    operation_definition,
+    capability_statement,
+    operation_outcome,
+    modname_to_opname,
+    opname_to_modname,
+)
+
 filter_folder = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'filters')
 server_port = 3000
 
@@ -156,10 +166,28 @@ class FilterHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/':
             self._send_json(200, mod_cfgs)
-        else:
-            self._send(404)
+            return
+        if self.path == '/fhir/metadata':
+            self._send_fhir(200, capability_statement(mod_cfgs))
+            return
+        if self.path.startswith('/fhir/OperationDefinition/'):
+            opname = unquote(self.path[len('/fhir/OperationDefinition/'):])
+            modname = opname_to_modname(opname)
+            cfg_entry = next((c for c in mod_cfgs if c['modname'] == modname), None)
+            if cfg_entry is None or modname not in mods:
+                self._send_fhir(404, operation_outcome(
+                    'error', 'not-found',
+                    f"OperationDefinition/{opname} not found"))
+                return
+            self._send_fhir(200, operation_definition(modname, cfg_entry))
+            return
+        self._send(404)
 
     def do_POST(self):
+        if self.path.startswith('/fhir/$') or self.path.startswith('/fhir/%24'):
+            self._handle_fhir_invoke()
+            return
+
         modname = unquote(self.path.lstrip('/'))
         m_modname = os.path.basename(modname)
 
@@ -204,6 +232,83 @@ class FilterHandler(BaseHTTPRequestHandler):
             print(f'filter {m_modname!r} run error: {e}')
             traceback.print_exc()
             self._send(500)
+
+    # ---- FHIR R4 Operation handler -----------------------------------------
+    # Path:   POST /fhir/$<operation-name>     (Parameters in, Bundle out)
+    # Filter modname is reconstructed from operation-name by replacing '-' →
+    # '_'. Body may be raw or gzip-compressed (Content-Encoding header).
+
+    def _handle_fhir_invoke(self):
+        # Strip leading '/fhir/$' (also handle URL-encoded form '/fhir/%24')
+        path = unquote(self.path)
+        opname = path[len('/fhir/$'):]
+        if '?' in opname:
+            opname = opname.split('?', 1)[0]
+        modname = opname_to_modname(opname)
+
+        if modname not in mods:
+            extra = _FILTER_EXTRAS.get(modname)
+            if extra:
+                msg = (f"filter {modname!r} is unavailable: missing optional "
+                       f"dependency. Install with `pip install "
+                       f"openvital[{extra}]`.")
+            else:
+                msg = f"filter {modname!r} is not loaded."
+            self._send_fhir(503, operation_outcome('error', 'not-supported', msg))
+            return
+
+        try:
+            clen = int(self.headers.get('Content-Length', 0))
+            raw = self.rfile.read(clen) if clen else b''
+            if (self.headers.get('Content-Encoding') or '').lower() == 'gzip':
+                raw = gzip.decompress(raw)
+            params = json.loads(raw.decode('utf-8'))
+        except Exception as e:
+            self._send_fhir(400, operation_outcome(
+                'error', 'invalid', f'bad request body: {e}'))
+            return
+
+        cfg_entry = next((c for c in mod_cfgs if c['modname'] == modname), None)
+        if cfg_entry is None:
+            self._send_fhir(500, operation_outcome(
+                'error', 'exception', f'cfg metadata missing for {modname!r}'))
+            return
+        input_names = [i.get('name', f'in{j}')
+                       for j, i in enumerate(cfg_entry.get('inputs', []))]
+        output_metas = list(cfg_entry.get('outputs', []))
+
+        try:
+            o = mods[modname]
+            if modname not in default_cfgs:
+                default_cfgs[modname] = copy.deepcopy(o.cfg)
+            defaults = default_cfgs[modname]
+
+            inp, opt, cfg, ctx = params_to_filter_input(
+                params, defaults, input_names)
+            result = o.run(inp, opt, cfg)
+            bundle = result_to_bundle(result, output_metas, ctx)
+            self._send_fhir(200, bundle,
+                            accept_encoding=self.headers.get('Accept-Encoding', ''))
+        except ValueError as e:
+            self._send_fhir(400, operation_outcome('error', 'invalid', str(e)))
+        except Exception as e:
+            print(f"filter {modname!r} fhir invoke error: {e}")
+            traceback.print_exc()
+            self._send_fhir(500, operation_outcome('error', 'exception', str(e)))
+
+    def _send_fhir(self, code, obj, accept_encoding=''):
+        body = json.dumps(obj).encode('utf-8')
+        gz = 'gzip' in (accept_encoding or '').lower()
+        if gz:
+            body = gzip.compress(body)
+        self.send_response(code)
+        self.send_header('Content-Type', 'application/fhir+json')
+        if gz:
+            self.send_header('Content-Encoding', 'gzip')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        if body:
+            self.wfile.write(body)
 
 
 if __name__ == "__main__":
