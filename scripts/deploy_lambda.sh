@@ -91,15 +91,30 @@ aws ecr get-login-password "${PROFILE_ARGS[@]}" --region "$REGION" \
 echo "  logged in to $ECR"
 
 # --- build + push ---
+# Prefer `docker buildx` (multi-arch, no daemon image load) when it's
+# installed; fall back to plain `docker build` + `docker push` so the
+# script works on hosts that ship apt's docker.io (no buildx plugin),
+# e.g. fresh WSL Ubuntu.
 echo
-echo "=== build + push linux/amd64 ==="
-docker buildx build \
-  --platform linux/amd64 \
-  --provenance=false \
-  -t "$IMAGE_REMOTE" \
-  -t "$IMAGE_LATEST" \
-  --push \
-  .
+if docker buildx version >/dev/null 2>&1; then
+  echo "=== build + push linux/amd64 (buildx) ==="
+  docker buildx build \
+    --platform linux/amd64 \
+    --provenance=false \
+    -t "$IMAGE_REMOTE" \
+    -t "$IMAGE_LATEST" \
+    --push \
+    .
+else
+  echo "=== build + push linux/amd64 (plain docker, no buildx) ==="
+  docker build \
+    -t "$IMAGE_LOCAL" \
+    -t "$IMAGE_REMOTE" \
+    -t "$IMAGE_LATEST" \
+    .
+  docker push "$IMAGE_REMOTE"
+  docker push "$IMAGE_LATEST"
+fi
 
 # Resolve image digest from ECR for the deploy record.
 DIGEST=$(aws ecr describe-images \
