@@ -14,13 +14,22 @@
 #
 set -euo pipefail
 
-PROFILE=lucid-claude-code
+PROFILE=${PROFILE-lucid-claude-code}   # set PROFILE= (empty) to use the default chain
 REGION=ap-northeast-2
 ACCT=595007890878
 ECR=$ACCT.dkr.ecr.$REGION.amazonaws.com
 REPO=openvital-filter
 FUNCTION=openvital-filter
 LIVE_URL=https://filter.vitaldb.net/
+
+# PROFILE may be empty (e.g. when running with env-var credentials only). In
+# that case fall through to the default credential chain instead of passing
+# an invalid `--profile` flag.
+if [ -n "$PROFILE" ]; then
+  PROFILE_ARGS=(--profile "$PROFILE")
+else
+  PROFILE_ARGS=()
+fi
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
@@ -77,7 +86,7 @@ fi
 
 # --- ECR login ---
 echo "=== ECR login ==="
-aws ecr get-login-password --profile "$PROFILE" --region "$REGION" \
+aws ecr get-login-password "${PROFILE_ARGS[@]}" --region "$REGION" \
   | docker login --username AWS --password-stdin "$ECR" >/dev/null
 echo "  logged in to $ECR"
 
@@ -94,7 +103,7 @@ docker buildx build \
 
 # Resolve image digest from ECR for the deploy record.
 DIGEST=$(aws ecr describe-images \
-  --profile "$PROFILE" --region "$REGION" \
+  "${PROFILE_ARGS[@]}" --region "$REGION" \
   --repository-name "$REPO" \
   --image-ids imageTag="$TAG" \
   --query 'imageDetails[0].imageDigest' --output text)
@@ -104,7 +113,7 @@ echo "  digest: $DIGEST"
 echo
 echo "=== update Lambda function code ==="
 aws lambda update-function-code \
-  --profile "$PROFILE" --region "$REGION" \
+  "${PROFILE_ARGS[@]}" --region "$REGION" \
   --function-name "$FUNCTION" \
   --image-uri "$IMAGE_REMOTE" \
   --query '[FunctionArn,LastUpdateStatus]' --output text
@@ -113,7 +122,7 @@ aws lambda update-function-code \
 echo "  waiting for LastUpdateStatus=Successful ..."
 for i in $(seq 1 60); do
   status=$(aws lambda get-function-configuration \
-    --profile "$PROFILE" --region "$REGION" \
+    "${PROFILE_ARGS[@]}" --region "$REGION" \
     --function-name "$FUNCTION" \
     --query 'LastUpdateStatus' --output text)
   if [ "$status" = "Successful" ]; then
@@ -122,7 +131,7 @@ for i in $(seq 1 60); do
   fi
   if [ "$status" = "Failed" ]; then
     reason=$(aws lambda get-function-configuration \
-      --profile "$PROFILE" --region "$REGION" \
+      "${PROFILE_ARGS[@]}" --region "$REGION" \
       --function-name "$FUNCTION" \
       --query 'LastUpdateStatusReason' --output text)
     echo "  ✗ update failed: $reason" >&2
