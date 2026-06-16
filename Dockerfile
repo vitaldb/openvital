@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip install --no-cache-dir \
     numpy \
-    openecg \
+    'openecg>=0.11.0' \
     scipy
 
 COPY openvital /app/openvital

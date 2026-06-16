@@ -37,7 +37,7 @@ classifiers = [
 # install only what your filter modules need.
 dependencies = [
     "numpy",
-    "openecg>=0.3.2",
+    "openecg>=0.11.0",
 ]
 
 [project.optional-dependencies]
